@@ -1,28 +1,29 @@
+import numpy as np
+import pandas as pd
 import pygame
-import random
-from pygame.locals import *
+import sys
 
-# Define colors
+# Constants
+WIDTH, HEIGHT = 640, 360
+DESIRED_SEPARATION = 25.0
+NEIGHBOR_DISTANCE = 50
+BOID_COUNT = 150
+
+# Colors
 WHITE = (255, 255, 255)
-BLACK = (0, 0, 0)
+RED = (255, 0, 0)
 
-# Boid class
 class Boid:
     def __init__(self, x, y):
-        self.position = pygame.Vector2(x, y)
-        self.velocity = pygame.Vector2(random.uniform(-1, 1), random.uniform(-1, 1))
-        self.acceleration = pygame.Vector2(0, 0)
+        self.position = np.array([x, y], dtype=float)
+        angle = np.random.uniform(0, 2 * np.pi)
+        self.velocity = np.array([np.cos(angle), np.sin(angle)], dtype=float)
+        self.acceleration = np.zeros(2, dtype=float)
         self.r = 2.0
-        self.maxspeed = 2
-        self.maxforce = 0.03
+        self.max_speed = 10
+        self.max_force = 0.03
 
-    def run(self, boids):
-        self.flock(boids)
-        self.update()
-        self.borders()
-        self.render()
-
-    def applyForce(self, force):
+    def apply_force(self, force):
         self.acceleration += force
 
     def flock(self, boids):
@@ -30,136 +31,143 @@ class Boid:
         ali = self.align(boids)
         coh = self.cohesion(boids)
 
-        # Check if sep vector has non-zero length before scaling
-        if sep.length() > 0:
-            sep.scale_to_length(1.5)
-        
-        ali.scale_to_length(1.0)
-        coh.scale_to_length(1.0)
+        sep *= 1.5
+        ali *= 1.0
+        coh *= 1.0
 
-        self.applyForce(sep)
-        self.applyForce(ali)
-        self.applyForce(coh)
-
-    def update(self):
-        self.velocity += self.acceleration
-        self.velocity.scale_to_length(self.maxspeed)
-        self.position += self.velocity
-        self.acceleration *= 0
-
-    def seek(self, target):
-        desired = target - self.position
-        desired.normalize_ip()
-        desired *= self.maxspeed
-        steer = desired - self.velocity
-        steer.scale_to_length(self.maxforce)
-        return steer
-
-    def render(self):
-        theta = self.velocity.angle_to(pygame.Vector2(0, 1)) + 90
-        pygame.draw.polygon(screen, WHITE, [
-            self.position + pygame.Vector2(0, -self.r*2),
-            self.position + pygame.Vector2(-self.r, self.r*2),
-            self.position + pygame.Vector2(self.r, self.r*2)
-        ])
-
-    def borders(self):
-        if self.position.x < -self.r:
-            self.position.x = SCREEN_WIDTH + self.r
-        if self.position.y < -self.r:
-            self.position.y = SCREEN_HEIGHT + self.r
-        if self.position.x > SCREEN_WIDTH + self.r:
-            self.position.x = -self.r
-        if self.position.y > SCREEN_HEIGHT + self.r:
-            self.position.y = -self.r
+        self.apply_force(sep)
+        self.apply_force(ali)
+        self.apply_force(coh)
 
     def separate(self, boids):
-        desiredseparation = 25.0
-        steer = pygame.Vector2(0, 0)
+        steer = np.zeros(2, dtype=float)
         count = 0
+
         for other in boids:
-            d = self.position.distance_to(other.position)
-            if 0 < d < desiredseparation:
+            d = np.linalg.norm(self.position - other.position)
+            if 0 < d < DESIRED_SEPARATION:
                 diff = self.position - other.position
-                diff.normalize_ip()
-                diff /= d
+                diff /= d  # Weight by distance
                 steer += diff
                 count += 1
+
         if count > 0:
             steer /= count
-        if steer.length() > 0:
-            steer.normalize_ip()
-            steer *= self.maxspeed
+
+        if np.linalg.norm(steer) > 0:
+            steer /= np.linalg.norm(steer)
+            steer *= self.max_speed
             steer -= self.velocity
-            steer.scale_to_length(self.maxforce)
+            steer = np.clip(steer, -self.max_force, self.max_force)
+
         return steer
 
     def align(self, boids):
-        neighbordist = 50
-        sum_vel = pygame.Vector2(0, 0)
+        sum_vel = np.zeros(2, dtype=float)
         count = 0
+
         for other in boids:
-            d = self.position.distance_to(other.position)
-            if 0 < d < neighbordist:
+            d = np.linalg.norm(self.position - other.position)
+            if 0 < d < NEIGHBOR_DISTANCE:
                 sum_vel += other.velocity
                 count += 1
+
         if count > 0:
-            sum_vel /= count
-            sum_vel.normalize_ip()
-            sum_vel *= self.maxspeed
-            steer = sum_vel - self.velocity
-            steer.scale_to_length(self.maxforce)
+            avg_vel = sum_vel / count
+            avg_vel /= np.linalg.norm(avg_vel)
+            avg_vel *= self.max_speed
+            steer = avg_vel - self.velocity
+            steer = np.clip(steer, -self.max_force, self.max_force)
             return steer
         else:
-            return pygame.Vector2(0, 0)
+            return np.zeros(2, dtype=float)
 
     def cohesion(self, boids):
-        neighbordist = 50
-        sum_pos = pygame.Vector2(0, 0)
+        sum_pos = np.zeros(2, dtype=float)
         count = 0
+
         for other in boids:
-            d = self.position.distance_to(other.position)
-            if 0 < d < neighbordist:
+            d = np.linalg.norm(self.position - other.position)
+            if 0 < d < NEIGHBOR_DISTANCE:
                 sum_pos += other.position
                 count += 1
+
         if count > 0:
-            sum_pos /= count
-            return self.seek(sum_pos)
+            avg_pos = sum_pos / count
+            return self.seek(avg_pos)
         else:
-            return pygame.Vector2(0, 0)
+            return np.zeros(2, dtype=float)
 
+    def seek(self, target):
+        desired = target - self.position
+        desired /= np.linalg.norm(desired)
+        desired *= self.max_speed
+        steer = desired - self.velocity
+        steer = np.clip(steer, -self.max_force, self.max_force)
+        return steer
 
-# Initialize Pygame
+    def update(self):
+        self.velocity += self.acceleration
+        self.velocity = np.clip(self.velocity, -self.max_speed, self.max_speed)
+        self.position += self.velocity
+        self.acceleration *= 0
+
+    def borders(self):
+        if self.position[0] < -self.r:
+            self.position[0] = WIDTH + self.r
+        if self.position[1] < -self.r:
+            self.position[1] = HEIGHT + self.r
+        if self.position[0] > WIDTH + self.r:
+            self.position[0] = -self.r
+        if self.position[1] > HEIGHT + self.r:
+            self.position[1] = -self.r
+
+    def render(self, screen):
+        theta = np.arctan2(self.velocity[1], self.velocity[0]) + np.radians(90)
+        pygame.draw.polygon(screen, RED, self.triangle(theta))
+
+    def triangle(self, theta):
+        return [
+            (self.position[0] + np.cos(theta) * self.r * 2, self.position[1] + np.sin(theta) * self.r * 2),
+            (self.position[0] + np.cos(theta - 2 * np.pi / 3) * self.r, self.position[1] + np.sin(theta - 2 * np.pi / 3) * self.r),
+            (self.position[0] + np.cos(theta + 2 * np.pi / 3) * self.r, self.position[1] + np.sin(theta + 2 * np.pi / 3) * self.r)
+        ]
+
+class Flock:
+    def __init__(self):
+        self.boids = []
+
+    def run(self):
+        for boid in self.boids:
+            boid.flock(self.boids)
+            boid.update()
+            boid.borders()
+            boid.render(screen)
+
+    def add_boid(self, boid):
+        self.boids.append(boid)
+
+# Initialize pygame
 pygame.init()
-
-# Set up the screen
-SCREEN_WIDTH = 640
-SCREEN_HEIGHT = 360
-screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
+screen = pygame.display.set_mode((WIDTH, HEIGHT))
 pygame.display.set_caption("Flocking Simulation")
 
-# Create a flock
-flock = []
+clock = pygame.time.Clock()
 
-# Add boids to the flock
-for _ in range(150):
-    flock.append(Boid(SCREEN_WIDTH / 2, SCREEN_HEIGHT / 2))
+# Create flock and add initial boids
+flock = Flock()
+for _ in range(BOID_COUNT):
+    flock.add_boid(Boid(WIDTH / 2, HEIGHT / 2))
 
 # Main loop
-running = True
-while running:
+while True:
     for event in pygame.event.get():
-        if event.type == QUIT:
-            running = False
-        elif event.type == MOUSEBUTTONDOWN:
-            flock.append(Boid(event.pos[0], event.pos[1]))
+        if event.type == pygame.QUIT:
+            pygame.quit()
+            sys.exit()
 
-    screen.fill(BLACK)
-
-    # Run the flock
-    for boid in flock:
-        boid.run(flock)
+    screen.fill(WHITE)
+    flock.run()
 
     pygame.display.flip()
-
-pygame.quit()
+    clock.tick(10000)
